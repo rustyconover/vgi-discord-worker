@@ -1,209 +1,171 @@
-<!-- managed-by: vgi-starters (edit upstream in shared/README.md.tmpl, then run tools/render.py) -->
 <p align="center">
   <img src="https://query.farm/media-kit/products/vgi/vgi-logo.png" alt="Vector Gateway Interface (VGI)" width="320">
 </p>
 
-<p align="center"><em>A Query.Farm VGI worker for DuckDB, written in TypeScript.</em></p>
+<p align="center"><em>Discord for DuckDB: a Query.Farm VGI worker written in TypeScript.</em></p>
 
-# VGI Starter Worker — TypeScript
+# VGI Discord Worker
 
-[![CI](https://github.com/Query-farm/vgi-starter-typescript/actions/workflows/ci.yml/badge.svg)](https://github.com/Query-farm/vgi-starter-typescript/actions/workflows/ci.yml)
 [![vgi worker: query.farm](https://query.farm/media-kit/shields/vgi-worker.svg)](https://query.farm)
 
-[VGI](https://query.farm/vgi) lets DuckDB call functions that live in a separate
-process: your code, in any language, exposed as ordinary SQL. This worker adds
-three example functions that you rename and replace with your own:
+Read servers, channels, members and message history from Discord, and post messages
+back, all from SQL. [VGI](https://query.farm/vgi) runs this worker as a separate process
+and DuckDB calls its functions like built-ins; data moves as Apache Arrow batches.
 
-| Function | Kind | Shows you how to |
-|---|---|---|
-| `greet(name)` / `greet(name, style)` | scalar | vectorize over a column, overload, constrain a constant |
-| `sequence_table(count, step := 1)` | table | stream rows in batches, take named arguments |
-| `fetch_items(base_url, page_size := 100)` | table | page through a REST API, retry, read a secret |
+## Functions
 
-<!-- template-only:start -->
-## Use this template
+All objects live in `discord.main`. Ids are `VARCHAR` snowflakes, exactly as Discord sends
+them; times are `TIMESTAMP WITH TIME ZONE`.
 
-This repository is a **template**. Click **Use this template** on GitHub, or:
+**Readers** (need a bot token):
 
-```bash
-gh repo create my-org/weather-worker --template Query-farm/vgi-starter-typescript --private --clone
-cd weather-worker
-make init NAME=weather     # renames catalog, package, binary, env vars; removes this section
-make check                 # lint + tests over every transport + metadata score
-```
+| Function | Returns |
+|---|---|
+| `me()` | the bot account behind the token |
+| `guilds()` | servers the bot is in, with approximate member/online counts |
+| `guild(guild_id)` | one server's settings, boost tier, counts |
+| `channels(guild_id)` | every channel, with type name, category, topic |
+| `active_threads(guild_id)` | open threads and forum posts |
+| `roles(guild_id)` | roles with colors and permission bit sets |
+| `members(guild_id, max_members := 1000)` | members, nicknames, role ids, join dates (Server Members intent) |
+| `emojis(guild_id)` | custom emojis with markup and CDN URLs |
+| `scheduled_events(guild_id)` | events with status and RSVP counts |
+| `messages(channel_id, max_messages := 100, before_id := NULL, after_id := NULL)` | message history, 100 per page, with reactions, mentions, attachments |
+| `message(channel_id, message_id)` | one message |
+| `pinned_messages(channel_id)` | pins, with `pinned_at` |
+| `reaction_users(channel_id, message_id, emoji)` | who reacted with an emoji |
 
-Prefer to work with an AI coding agent? `make init` first, then hand it
-[AGENTS.md](AGENTS.md). See [Using with coding agents](#using-with-coding-agents).
+**Writers**: each one acts every time the query runs. Mentions never ping unless you pass `allow_mentions := true`.
 
-Starters exist for [Python](https://github.com/Query-farm/vgi-starter-python),
-[TypeScript](https://github.com/Query-farm/vgi-starter-typescript),
-[Go](https://github.com/Query-farm/vgi-starter-go),
-[Rust](https://github.com/Query-farm/vgi-starter-rust),
-[Java](https://github.com/Query-farm/vgi-starter-java) and
-[C#](https://github.com/Query-farm/vgi-starter-csharp). They are generated from
-[Query-farm/vgi-starters](https://github.com/Query-farm/vgi-starters); send
-changes there.
-<!-- template-only:end -->
+| Function | Does |
+|---|---|
+| `send_message(channel_id, content, reply_to := NULL, allow_mentions := false, tts := false)` | posts and returns the message |
+| `send_messages((SELECT channel_id, content [, reply_to] ...), fail_on_error := true, allow_mentions := false)` | posts one message per input row, returns `ok`/`error` per row |
+| `send_webhook(webhook_url, content, username := NULL, avatar_url := NULL, allow_mentions := false)` | posts through a webhook (no bot needed) |
+| `edit_message(channel_id, message_id, content)` | rewrites a bot message |
+| `delete_message(channel_id, message_id)` | deletes a message |
+| `add_reaction(channel_id, message_id, emoji)` | reacts as the bot |
+
+**Utilities** (no token, no network): `snowflake_timestamp`, `snowflake_from_timestamp`,
+`snowflake_parts`, `user_mention`, `channel_mention`, `role_mention`, `timestamp_markdown`
+(1- and 2-argument forms), `escape_markdown`, `message_url`, `avatar_url`,
+`permission_names`, `has_permission`, `channel_type_name`, and the tables
+`permission_flags` and `channel_types`.
 
 ## Quick start
 
-**Prerequisites:** [Bun](https://bun.sh) 1.3+ and [uv](https://docs.astral.sh/uv/) (it runs the SQL
-test runner and the metadata checker).
+**Prerequisites:** [Bun](https://bun.sh) 1.3+ and [uv](https://docs.astral.sh/uv/).
 
-```bash
-make build
-```
-
-Then open DuckDB 2.0 or [Haybarn](https://query.farm/products/haybarn) and attach the
-worker. `LOCATION` is the command DuckDB runs to start it; use an absolute path,
-because a relative one resolves against DuckDB's working directory.
-
-**DuckDB 2.0:**
+1. Create an application and bot at <https://discord.com/developers/applications>, copy
+   the bot token, and invite the bot to your server. To read `members()` turn on the
+   **Server Members** intent. To see message text, turn on **Message Content**.
+2. `make build`
+3. In DuckDB 2.0 (`uvx --from duckdb-cli==2.0.0 duckdb`):
 
 ```sql
 SET allow_extension_repositories = 'allowed';
 CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm WITH PREFIX 'https://duckdb-extensions.query.farm';
 INSTALL vgi FROM query_farm;
 LOAD vgi FROM query_farm;
-ATTACH 'starter' (TYPE vgi, LOCATION '/abs/path/to/vgi-starter-typescript/bin/vgi-starter-worker');
+ATTACH 'discord' (TYPE vgi, LOCATION '/abs/path/to/discord-worker/bin/vgi-discord-worker');
+
+CREATE SECRET (TYPE discord, TOKEN 'your-bot-token');
+
+SELECT name, approximate_member_count FROM discord.main.guilds();
 ```
 
-**Haybarn 2.0** (`uvx haybarn-cli`):
+`LOCATION` must be an absolute path. Instead of a secret you can export
+`DISCORD_BOT_TOKEN` before starting DuckDB. In later sessions, `LOAD vgi FROM query_farm`
+is enough.
+
+## Examples
 
 ```sql
-INSTALL vgi FROM community;
-LOAD vgi;
-ATTACH 'starter' (TYPE vgi, LOCATION '/abs/path/to/vgi-starter-typescript/bin/vgi-starter-worker');
+-- Most active posters in #general over the last 5000 messages
+SELECT author_username, count(*) AS posts
+FROM discord.main.messages('<channel_id>', max_messages := 5000)
+WHERE NOT author_is_bot
+GROUP BY ALL ORDER BY posts DESC LIMIT 10;
+
+-- Everything since New Year: turn a time into a snowflake cursor
+SELECT created_at, author_username, content
+FROM discord.main.messages('<channel_id>', max_messages := 100000,
+       after_id := discord.main.snowflake_from_timestamp(TIMESTAMPTZ '2026-01-01 00:00:00+00'))
+ORDER BY created_at;
+
+-- Which emojis win in reactions?
+SELECT r.emoji, sum(r.count) AS uses
+FROM (SELECT UNNEST(reactions) AS r FROM discord.main.messages('<channel_id>', max_messages := 10000))
+GROUP BY ALL ORDER BY uses DESC;
+
+-- Roles that can manage messages (or are admin)
+SELECT name FROM discord.main.roles('<guild_id>')
+WHERE discord.main.has_permission(permissions, 'MANAGE_MESSAGES')
+   OR discord.main.has_permission(permissions, 'ADMINISTRATOR');
+
+-- Member joins per month
+SELECT date_trunc('month', joined_at) AS month, count(*)
+FROM discord.main.members('<guild_id>', max_members := 100000) GROUP BY ALL ORDER BY month;
+
+-- Post a report, one message per alert row
+SELECT * FROM discord.main.send_messages(
+  (SELECT '<channel_id>' AS channel_id, 'Low stock: ' || sku AS content FROM inventory WHERE qty < 5),
+  fail_on_error := false);
 ```
 
-Now call the functions:
+## Secrets and configuration
 
-```sql
-SELECT starter.main.greet('Ada');                         -- Hi, Ada!
-SELECT starter.main.greet('Ada', 'formal');               -- Good day, Ada.
-SELECT * FROM starter.main.sequence_table(5, step := 2) ORDER BY n;
-```
+| Setting | Secret field (`TYPE discord`) | Environment variable | Default |
+|---|---|---|---|
+| Bot token | `token` (redacted) | `DISCORD_BOT_TOKEN` | none |
+| API base URL | `api_base` | `DISCORD_API_BASE` | `https://discord.com/api/v10` |
 
-`fetch_items` pages through a REST API. Try it against the public demo API (25 fixed items):
+The secret wins over the environment. The token is resolved on every call and never
+stored in table-function state (state travels back to DuckDB over HTTP). Webhook
+requests go to `<api base>/webhooks/<id>/<token>`, so `api_base` redirects them too.
 
-```sql
-SELECT category, count(*) AS items, round(avg(price), 2) AS avg_price
-FROM starter.main.fetch_items('https://vgi-starter-api.query-farm.services/v1')
-GROUP BY category ORDER BY category;
-```
+**Rate limits.** 429 responses are retried after Discord's `retry_after`. 5xx and network
+errors are retried with backoff (5 attempts, 30 s timeout per request). A bucket that
+reports `X-RateLimit-Remaining: 0` makes the next request on that route wait for the
+reset instead of drawing a 429.
 
-If an older cached extension misbehaves, refresh it with `FORCE INSTALL vgi FROM query_farm;`
-(DuckDB) or `FORCE INSTALL vgi FROM community;` (Haybarn).
-
-## Using it in a pipeline
-
-Worker functions compose with everything else in DuckDB:
-
-```sql
--- Materialize an API into a local table.
-CREATE TABLE items AS SELECT * FROM starter.main.fetch_items('https://vgi-starter-api.query-farm.services/v1');
-
--- Join it with local files.
-SELECT i.name, i.price, s.units
-FROM items i JOIN 'sales.parquet' s ON s.item_id = i.id;
-
--- Call a scalar per row of another table.
-SELECT customer, starter.main.greet(customer, 'formal') FROM read_csv('customers.csv');
-```
+**Errors** name the HTTP status and Discord's error code, e.g.
+`Discord GET /guilds/1/channels failed with HTTP 403 (code 50001): Missing Access`.
 
 ## Project layout
 
 ```
 src/
-  worker.ts        # entry point: serves the catalog over stdio, --unix or --http
-  catalog.ts       # assembles the catalog; add new functions to FUNCTIONS
-  meta.ts          # catalog/schema metadata + helpers (objectTags, column)
-  greet.ts         # scalar example (overloads, const param with choices)
-  sequence.ts      # table function example (named args, streaming state)
-  fetch_items.ts   # REST API table function (pagination, retries, secrets)
-  cli.ts           # flag parsing: stdio / --unix / --http (PORT:<n>, /health)
-  log.ts           # stderr logger
-bin/               # vgi-starter-worker (what DuckDB launches) and run-recipe
-tests/             # bun unit tests (worker subprocess + mock API)
-test/sql/          # sqllogictest files run through DuckDB
-test/mock_api/     # offline mock of the REST API used by tests
-examples/          # recipes: pushdown, caching, catalog tables, aggregates, COPY …
-ci/                # integration harness used by `make test-sql` and CI
-scripts/           # vgi_template.py (init / template-diff)
-vgi-agent-tests.yaml  # private graders for the agent test tasks
+  worker.ts          # entry point: serves the catalog over stdio, --unix or --http
+  catalog.ts         # assembles functions + reference tables into the catalog
+  meta.ts            # catalog/schema metadata, categories, agent test tasks
+  reads.ts           # guild/channel/member readers
+  messages.ts        # message history, single message, pins, reaction users
+  writes.ts          # send / bulk send / webhook / edit / delete / react
+  utilities.ts       # pure scalars and the permission_flags / channel_types tables
+  discord/api.ts     # REST client: auth, retries, rate limits, errors
+  discord/table.ts   # paginated table-function helper, column specs
+  discord/models.ts  # Discord JSON -> typed rows
+  discord/convert.ts # snowflakes, permissions, channel types, markup
+test/mock_discord/   # offline mock of the Discord API used by every test
+test/sql/            # sqllogictest suite (Haybarn runner) over stdio / launch / http
+tests/               # bun unit tests
+vgi-worker.json      # stock-DuckDB verification manifest (ci/verify-stock-duckdb.sh)
 ```
-
-## Adding a function
-
-1. Create `src/<name>.ts`. Copy the closest example: `greet.ts` for a scalar,
-   `sequence.ts` for a generator, `fetch_items.ts` for an API.
-2. Declare arguments: `params` + `argDocs` (scalars), or the ordered `parameters`
-   list when a constant needs `choices`/`ge`/`le`. Table functions use `args`,
-   `argDocs` and `argConstraints`; an argument listed in `argDefaults` becomes a
-   named argument (`step := 2`), the others are positional.
-3. Give it `description`, `tags: objectTags(...)` (from `src/meta.ts`) and
-   `examples`.
-4. Add it to `FUNCTIONS` in `src/catalog.ts`.
-
-**Which kind of function?**
-
-| You want to… | Use |
-|---|---|
-| compute one value per input row | a **scalar** function |
-| return a set of rows from arguments (an API, a file, a generator) | a **table** function |
-| transform or aggregate the rows of a query | a **table in-out** function or an **aggregate** |
-| expose a fixed dataset by name (`SELECT * FROM starter.main.t`) | a **catalog table** |
-| write data out to a file or service | `COPY … TO` with a copy function |
-| accept `INSERT` / `UPDATE` / `DELETE` | a catalog table with insert/update/delete functions |
-
-The [examples/](examples/) folder has a recipe for most of these. Writable tables are
-covered in the TypeScript SDK's API reference (look for the table descriptor's
-insert, update and delete functions).
-
-## Secrets and configuration
-
-`fetch_items` shows the recommended pattern. A bearer token comes from a DuckDB secret
-when one exists, and from an environment variable otherwise:
-
-```sql
-CREATE SECRET (TYPE starter_api, TOKEN 'your-token');      -- per session, never logged
-```
-
-```bash
-STARTER_API_TOKEN=your-token make run-http                # for servers and containers
-```
-
-Try it: the demo API's `/v1/auth` endpoint needs the published token `demo-token`.
-
-```sql
-SELECT count(*) FROM starter.main.fetch_items('https://vgi-starter-api.query-farm.services/v1/auth');   -- fails: HTTP 401
-CREATE SECRET (TYPE starter_api, TOKEN 'demo-token');
-SELECT count(*) FROM starter.main.fetch_items('https://vgi-starter-api.query-farm.services/v1/auth');   -- 25
-```
-
-Never bake credentials into the image or the source. If a function can't run without
-real credentials, its examples can't execute in CI either. Set `execute: false` on the
-metadata check for that worker (see `.github/workflows/ci.yml`), and add
-`LINT_ARGS ?= --no-execute` to the Makefile so local runs match.
 
 ## Testing
 
 ```bash
-make test-unit                 # fast TypeScript unit tests
-make test-sql                  # test/sql/*.test through DuckDB (stdio)
-make test-sql TRANSPORT=http   # …over HTTP (also: launch)
-make check                     # everything CI runs
+make check        # biome + tsc, unit tests, SQL tests over 3 transports, vgi-lint
+make test-unit    # bun tests (pure helpers + worker subprocess against the mock API)
+make test-sql     # SQL suite through haybarn-unittest against the mock API
+VERIFIER=/path/to/verify_worker.py ci/verify-stock-duckdb.sh   # stock DuckDB 2.0.0
 ```
 
-`test/sql/*.test` files are [sqllogictest](https://duckdb.org/docs/stable/dev/sqllogictest/intro)
-scripts. `ci/run-integration.sh` runs them against your worker and fails on any
-unexpected skip, so a broken transport can't hide behind a green run.
-`fetch_items` is tested against `test/mock_api/server.py` so tests are fast and
-offline.
-
-**Testing against real data:** put live tests in their own `.test` file that starts with
-`require-env STARTER_LIVE`. They run only when that variable is set. Add the skip reason
-to `EXPECTED_SKIP_REASONS` in CI.
+All tests run offline against `test/mock_discord/server.py`. The mock serves 250 messages,
+1500 members, rate-limit headers and a 429 on the first GET of each URL. No test talks to
+Discord. `make lint-explain` runs with no token and an unreachable API base, because the
+linter probes table functions, including the writers, with their example arguments.
 
 ## Metadata and the quality score
 
@@ -254,12 +216,12 @@ Use `log` from `src/log.ts` (it writes to stderr); `--debug` or `--log-level deb
 The same binary serves stdio (DuckDB starts it locally) or HTTP (you host it):
 
 ```bash
-docker build -t weather-worker .
-docker run -p 8000:8000 -e STARTER_API_TOKEN=... weather-worker   # health: GET /health
+docker build -t vgi-discord-worker .
+docker run -p 8000:8000 -e DISCORD_BOT_TOKEN=... vgi-discord-worker   # health: GET /health
 ```
 
 ```sql
-ATTACH 'starter' (TYPE vgi, LOCATION 'https://workers.example.com/starter');
+ATTACH 'discord' (TYPE vgi, LOCATION 'https://workers.example.com/discord');
 ```
 
 Put hosted workers behind TLS and authentication. See
@@ -280,9 +242,8 @@ version in `package.json`.
 recipe for adding a function, the metadata checklist and the sharp edges. A good first
 prompt:
 
-> Read AGENTS.md. Replace `fetch_items` with `forecast(lat DOUBLE, lon DOUBLE)` that calls
-> the Open-Meteo API. Include full metadata, a mock-server test and a `STARTER_LIVE` test.
-> You're done when `make check` passes.
+> Read AGENTS.md. Add a table function `invites(guild_id)` over GET /guilds/{id}/invites,
+> with full metadata, mock-server fixtures and SQL tests. You're done when `make check` passes.
 
 ## Keeping up with the template
 

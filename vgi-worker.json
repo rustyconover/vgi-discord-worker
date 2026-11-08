@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "catalog": "discord",
+  "worker": ["bin/vgi-discord-worker"],
+  "checks": [
+    {
+      "name": "snowflake decode",
+      "sql": "SELECT epoch_ms(discord.main.snowflake_timestamp('175928847299117063')) AS ms",
+      "columns": ["ms"],
+      "rows": [[1462015105796]]
+    },
+    {
+      "name": "snowflake cursor round trip over several batches",
+      "sql": "SELECT count(*) FROM range(5000) t(i) WHERE epoch_ms(discord.main.snowflake_timestamp(discord.main.snowflake_from_timestamp(to_timestamp(1704067200 + i)))) = (1704067200 + i) * 1000",
+      "rows": [[5000]]
+    },
+    {
+      "name": "permission decoding",
+      "sql": "SELECT discord.main.permission_names('3072') AS names, discord.main.has_permission('8', 'ADMINISTRATOR') AS admin",
+      "rows": [[["VIEW_CHANNEL", "SEND_MESSAGES"], true]]
+    },
+    {
+      "name": "reference table",
+      "sql": "SELECT type, name FROM discord.main.channel_types WHERE name LIKE '%THREAD' ORDER BY type",
+      "rows": [[10, "ANNOUNCEMENT_THREAD"], [11, "PUBLIC_THREAD"], [12, "PRIVATE_THREAD"]]
+    },
+    {
+      "name": "bot user (mock API via env)",
+      "sql": "SELECT username, is_bot FROM discord.main.me()",
+      "rows": [["testbot", true]]
+    },
+    {
+      "name": "members paginate past 1000",
+      "sql": "SELECT count(*), count(*) FILTER (WHERE is_bot) FROM discord.main.members('1178847726796800002', max_members := 5000)",
+      "rows": [[1500, 3]]
+    },
+    {
+      "name": "message history with reactions",
+      "sql": "SELECT count(*), count(DISTINCT message_id), sum(reaction_count) FROM discord.main.messages('1179210114662400004', max_messages := 1000)",
+      "rows": [[250, 250, 4]]
+    },
+    {
+      "name": "time-window cursor",
+      "sql": "SELECT count(*) FROM discord.main.messages('1179210114662400004', max_messages := 1000, after_id := discord.main.snowflake_from_timestamp(TIMESTAMPTZ '2025-01-01 04:00:00+00'))",
+      "rows": [[10]]
+    },
+    {
+      "name": "bulk send",
+      "sql": "SELECT count(*) FILTER (WHERE ok) FROM discord.main.send_messages((SELECT '1179210114662400005' AS channel_id, 'row ' || i AS content FROM range(3) t(i)))",
+      "rows": [[3]]
+    }
+  ]
+}

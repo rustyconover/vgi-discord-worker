@@ -1,16 +1,35 @@
 # Private graders for the public vgi.agent_test_tasks in the worker's catalog metadata.
 # `vgi-lint lint --ai` runs an agent on each prompt and grades it with check_sql.
 # See https://github.com/Query-farm/vgi-lint-check (VGI920).
+# Every task uses the token-free utilities, so grading needs no Discord credentials.
 tasks:
-  - name: formal_greeting
-    reference_sql: SELECT starter.main.greet('Grace', 'formal') AS greeting
-  - name: sum_of_squares
-    reference_sql: SELECT sum(squared) AS total FROM starter.main.sequence_table(10)
-  - name: stepped_sequence
-    reference_sql: SELECT n FROM starter.main.sequence_table(4, step := 5) ORDER BY n
-  # Reads the public demo API (https://vgi-starter-api.query-farm.services/v1).
-  - name: items_per_category
-    check_sql: >-
-      SELECT count(*) = 3 AND sum(items) = 25
-      FROM (SELECT category, count(*) AS items
-            FROM starter.main.fetch_items('https://vgi-starter-api.query-farm.services/v1') GROUP BY category)
+  - name: snowflake_created
+    reference_sql: SELECT epoch_ms(discord.main.snowflake_timestamp('175928847299117063')) AS ms
+  - name: snowflake_breakdown
+    reference_sql: >-
+      SELECT p.worker_id, p.process_id, p.increment
+      FROM (SELECT discord.main.snowflake_parts('175928847299117063') AS p)
+  - name: time_cursor
+    reference_sql: SELECT discord.main.snowflake_from_timestamp(TIMESTAMPTZ '2026-01-01 00:00:00+00') AS id
+  - name: decode_permissions
+    reference_sql: SELECT discord.main.permission_names('268435464') AS names
+  - name: admin_check
+    reference_sql: SELECT discord.main.has_permission('268435464', 'ADMINISTRATOR') AS is_admin
+  - name: permission_bits
+    reference_sql: SELECT name, bit FROM discord.main.permission_flags WHERE name LIKE 'MANAGE\_%' ESCAPE '\' ORDER BY bit
+  - name: thread_types
+    reference_sql: SELECT type FROM discord.main.channel_types WHERE name LIKE '%THREAD' ORDER BY type
+  - name: type_name
+    reference_sql: SELECT discord.main.channel_type_name(13) AS name
+  - name: relative_timestamp
+    reference_sql: SELECT discord.main.timestamp_markdown(TIMESTAMPTZ '2026-01-01 00:00:00+00', 'R') AS markup
+  - name: mentions
+    reference_sql: >-
+      SELECT discord.main.user_mention('80351110224678912') AS u, discord.main.channel_mention('80351110224678912') AS c,
+             discord.main.role_mention('80351110224678912') AS r
+  - name: escape_text
+    reference_sql: SELECT discord.main.escape_markdown('**not bold** my_file') AS t
+  - name: links
+    reference_sql: >-
+      SELECT discord.main.message_url('1', '2', '3') AS message_url,
+             discord.main.avatar_url('80351110224678912', 'abc123') AS avatar_url

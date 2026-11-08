@@ -22,35 +22,53 @@ Faster loops while iterating: `make test-unit`, `make test-sql`, `make lint-expl
 
 ```
 src/
-  worker.ts        # entry point: serves the catalog over stdio, --unix or --http
-  catalog.ts       # assembles the catalog; add new functions to FUNCTIONS
-  meta.ts          # catalog/schema metadata + helpers (objectTags, column)
-  greet.ts         # scalar example (overloads, const param with choices)
-  sequence.ts      # table function example (named args, streaming state)
-  fetch_items.ts   # REST API table function (pagination, retries, secrets)
-  cli.ts           # flag parsing: stdio / --unix / --http (PORT:<n>, /health)
-  log.ts           # stderr logger
-bin/               # vgi-starter-worker (what DuckDB launches) and run-recipe
-tests/             # bun unit tests (worker subprocess + mock API)
+  worker.ts          # entry point: serves the catalog over stdio, --unix or --http
+  catalog.ts         # assembles functions + reference tables into the catalog
+  meta.ts            # catalog/schema metadata, categories, agent test tasks
+  reads.ts           # guild/channel/member readers (copy one for a new GET endpoint)
+  messages.ts        # message history, single message, pins, reaction users
+  writes.ts          # send / bulk send (table in-out) / webhook / edit / delete / react
+  utilities.ts       # pure scalars + permission_flags / channel_types catalog tables
+  discord/api.ts     # REST client: secret/env auth, retries, rate limits, errors
+  discord/table.ts   # defineDiscordTable: paginated scan helper + ColumnSpec
+  discord/models.ts  # Discord JSON -> typed rows (column lists + mappers)
+  discord/convert.ts # snowflakes, permissions, channel types, markup
+  cli.ts, log.ts     # flag parsing, stderr logger
+bin/               # vgi-discord-worker (what DuckDB launches) and run-recipe
+tests/             # bun unit tests (pure helpers + worker subprocess vs the mock)
 test/sql/          # sqllogictest files run through DuckDB
-test/mock_api/     # offline mock of the REST API used by tests
-examples/          # recipes: pushdown, caching, catalog tables, aggregates, COPY …
-ci/                # integration harness used by `make test-sql` and CI
-scripts/           # vgi_template.py (init / template-diff)
+test/mock_discord/ # offline mock of the Discord API used by all tests
+examples/          # recipes: pushdown, caching, catalog tables, aggregates, COPY ...
+ci/                # integration harness; verify-stock-duckdb.sh
+vgi-worker.json    # stock-DuckDB verification manifest
 vgi-agent-tests.yaml  # private graders for the agent test tasks
 ```
 
+## Discord-specific rules
+
+- New API readers use `defineDiscordTable` (`src/discord/table.ts`): declare `columns`
+  (a `ColumnSpec[]`, which also generates `vgi.result_columns_schema`) and a `fetchPage`
+  that returns rows and the next cursor. Add the endpoint to `test/mock_discord/server.py`.
+- Keep ids `VARCHAR`. Use `TIMESTAMPTZ` for times; mappers return epoch milliseconds.
+- Write functions must default to `allowed_mentions: {parse: []}` and say they act on every
+  execution. Never give a write function an example that could reach a real resource.
+- `make lint-explain` runs with no token and `DISCORD_API_BASE` set to a closed port, because
+  the linter scans table functions with their example arguments. Keep it that way.
+- Credential-bound objects waive VGI520/VGI311 in `vgi-lint.toml` with reasons. Token-free
+  functions must stay covered by agent tasks.
+
+
 ## Recipe: add a function
 
-1. Create `src/<name>.ts`. Copy the closest example: `greet.ts` for a scalar,
-   `sequence.ts` for a generator, `fetch_items.ts` for an API.
+1. Copy the closest existing function: a scalar in `utilities.ts`, an API reader in
+   `reads.ts` / `messages.ts`, or a write action in `writes.ts`.
 2. Declare arguments: `params` + `argDocs` (scalars), or the ordered `parameters`
    list when a constant needs `choices`/`ge`/`le`. Table functions use `args`,
    `argDocs` and `argConstraints`; an argument listed in `argDefaults` becomes a
    named argument (`step := 2`), the others are positional.
 3. Give it `description`, `tags: objectTags(...)` (from `src/meta.ts`) and
    `examples`.
-4. Add it to `FUNCTIONS` in `src/catalog.ts`.
+4. Add it to its module's exported list (`READ_FUNCTIONS`, `MESSAGE_FUNCTIONS`, ...).
 
 Then, for every new function:
 
@@ -58,11 +76,11 @@ Then, for every new function:
    keywords, `doc_llm` (for agents: what it does, arguments, when to use it) and `doc_md`
    (for humans). Describe each argument, and for table functions describe the result
    columns. Add 1–2 `examples` with fully qualified, analytical SQL
-   (`starter.main.fn(...)`): project, filter or aggregate rather than `SELECT *`.
+   (`discord.main.fn(...)`): project, filter or aggregate rather than `SELECT *`.
 2. **Executable examples:** if the function is deterministic and needs no network,
    add an `executable_examples` entry with `ORDER BY` and an `expected_result`.
-3. **SQL test:** add cases to `test/sql/starter.test`, or a new `test/sql/<name>.test`
-   with the same header (`require vgi`, `require-env STARTER_WORKER`, then `ATTACH`).
+3. **SQL test:** add cases to `test/sql/discord.test`, or a new `test/sql/<name>.test`
+   with the same header (`require vgi`, `require-env DISCORD_WORKER`, then `ATTACH`).
    Avoid expected-error text that depends on SDK wording; use `<REGEX>:.*` for errors you
    don't control.
 4. **Unit test** for any non-trivial logic.
@@ -115,14 +133,14 @@ Recipes for most kinds are in `examples/`.
   published so DuckDB and agents can discover them, but SDKs differ in which ones they
   enforce: some skip named table arguments, C# enforces none, and `pattern` matching
   differs (Java requires a full match). Where its SDK doesn't enforce a constraint, the
-  starter re-checks it in bind code. Do the same, and on a columnar scalar argument validate
+  worker re-checks it in bind code. Do the same, and on a columnar scalar argument validate
   values in the compute body.
 - **Reserved argument names.** DuckDB keywords such as `interval`, `end`, `from`, `order`
   and `table` break `name := value` syntax. Pick another name (`start_date`, `end_date`).
 - **State must be serializable.** Table-function state (`initialState`/`process`) must be a plain object of numbers, bigints, strings, booleans, arrays or nested plain objects (no `Date`, `Map` or class instances): the SDK infers an Arrow schema for it and serializes it. Over HTTP each batch can be served by a different process, so the cursor travels with the request. Keep it small, and never put secrets in it.
 - **Examples must be deterministic.** Add `ORDER BY`, and no `now()`, random values or
   network. Examples that hit a live API go in `examples`, not `executable_examples`.
-- **Credentials.** Read them from a DuckDB secret first (`CREATE SECRET (TYPE starter_api, …)`),
+- **Credentials.** Read them from a DuckDB secret first (`CREATE SECRET (TYPE discord, …)`),
   then from an environment variable. Never put them in logs, examples or the repo, and
   keep them out of table-function state unless the state rule above says
   the SDK encrypts it. Workers that need real credentials set `execute: false` on the metadata check.
@@ -161,8 +179,7 @@ Recipes for most kinds are in `examples/`.
 
 ## Useful prompts
 
-- "Add a scalar `slugify(text VARCHAR) -> VARCHAR` with full metadata and tests."
-- "Replace `fetch_items` with a table function for <API>. Map its JSON to typed columns,
-  read the token from a `starter_api` secret, and add mock-server tests."
+- "Add a scalar `emoji_url(emoji_id VARCHAR, animated BOOLEAN)` with full metadata and tests."
+- "Add `invites(guild_id)` over GET /guilds/{id}/invites with a mock-server fixture and SQL tests."
 - "Add a catalog table `countries` (code, name) with a primary key, following
   `examples/catalog_tables`."

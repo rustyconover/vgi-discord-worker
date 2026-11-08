@@ -4,13 +4,10 @@
 # contract with `vgi-lint spec`.
 
 # The worker to attach, relative to this directory. Build it first with `make build`.
-location = "bin/vgi-starter-worker"
+location = "bin/vgi-discord-worker"
 
-# template-only:start
-fail_on = "info"
-# template-only:end
 # Fail on warnings while you build. Raise this to "info" before you publish the worker.
-# fork-only: fail_on = "warning"
+fail_on = "warning"
 
 # Waive a finding only with a kind and a reason, so the waiver can be audited:
 #   domain-exemption  permanent and legitimate for this worker
@@ -25,3 +22,74 @@ ignore = [
 #   vgi-lint lint --baseline vgi-lint-baseline --update-baseline
 # and uncomment the next line. Only new findings fail after that.
 # baseline = "vgi-lint-baseline"
+
+# --- Waivers specific to the Discord worker -------------------------------------------
+
+# me() and guilds() read the live Discord API with the user's bot token. Exposing them
+# as catalog tables would make every catalog scan (and the linter's L2 scan) call Discord
+# and fail without credentials, so they stay explicit table functions.
+[per_object."discord.main.me"]
+ignore = [
+  { code = "VGI311", kind = "domain-exemption", reason = "needs a live bot token; a table would make discovery scans hit the Discord API" },
+  { code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" },
+]
+[per_object."discord.main.guilds"]
+ignore = [
+  { code = "VGI311", kind = "domain-exemption", reason = "needs a live bot token; a table would make discovery scans hit the Discord API" },
+  { code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" },
+]
+
+# The *_rows functions are the backing scans of the permission_flags / channel_types
+# catalog tables; they must be registered for the table scan to resolve. The linter does
+# not link a table to its backing function, so it asks for the table that already exists.
+[per_object."discord.main.*_rows"]
+ignore = [
+  { code = "VGI311", kind = "tooling-bug", reason = "already exposed as a catalog table backed by this function" },
+  { code = "VGI520", kind = "domain-exemption", reason = "agent tasks exercise the catalog table this function backs" },
+]
+
+# send_webhook needs no bot token (the URL is the credential), so the linter's scan
+# probe gets past authentication. `make lint-explain` and CI run with DISCORD_API_BASE
+# pointing at a closed local port, so the probe fails to connect instead of posting.
+[per_object."discord.main.send_webhook"]
+ignore = [
+  { code = "VGI911", kind = "domain-exemption", reason = "write function; lint routes it to an unreachable API base so probing never posts" },
+  { code = "VGI520", kind = "domain-exemption", reason = "needs a live Discord webhook; covered by test/sql/discord.test against the mock API" },
+]
+
+# Agent test tasks are graded by running SQL; every API-backed function needs a real bot
+# token and a real guild, so they cannot be graded reproducibly. All token-free functions
+# are covered by tasks; the API-backed ones are covered by test/sql/discord.test against
+# the mock API.
+[per_object."discord.main.guild"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.channels"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.active_threads"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.roles"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.members"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.emojis"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.scheduled_events"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.messages"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.message"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.pinned_messages"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.reaction_users"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.send_message"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.send_messages"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.edit_message"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.delete_message"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]
+[per_object."discord.main.add_reaction"]
+ignore = [{ code = "VGI520", kind = "domain-exemption", reason = "needs live Discord credentials; covered by the mock-API SQL suite" }]

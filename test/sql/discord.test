@@ -1,0 +1,446 @@
+# name: test/sql/discord.test
+# description: SQL-level tests for the discord worker against the mock Discord API, run by ci/run-integration.sh
+# group: [discord]
+#
+# DISCORD_MOCK_API is test/mock_discord/server.py started with MOCK_FLAKY=1: the
+# first GET of every URL answers 429 + retry_after, so every read below also
+# exercises the rate-limit retry path. Fixture ids are listed in that file.
+# Timestamps are compared as epoch_ms(...) so results do not depend on TimeZone.
+
+require vgi
+
+require-env DISCORD_WORKER
+
+require-env DISCORD_MOCK_API
+
+statement ok
+ATTACH 'discord' (TYPE vgi, LOCATION '{DISCORD_WORKER}');
+
+# ------------------------------------------------------------ pure utilities (no token)
+
+query I
+SELECT epoch_ms(discord.main.snowflake_timestamp('175928847299117063'));
+----
+1462015105796
+
+query I
+SELECT epoch_ms(discord.main.snowflake_timestamp(175928847299117063::BIGINT::VARCHAR));
+----
+1462015105796
+
+query T
+SELECT discord.main.snowflake_timestamp('not-an-id');
+----
+NULL
+
+query T
+SELECT discord.main.snowflake_from_timestamp(TIMESTAMPTZ '2016-04-30 11:18:25.796+00');
+----
+175928847298985984
+
+# Round trip over a column: several rows in one batch.
+query I
+SELECT count(*) FROM range(1000) t(i)
+WHERE epoch_ms(discord.main.snowflake_timestamp(discord.main.snowflake_from_timestamp(to_timestamp(1704067200 + i))))
+    = (1704067200 + i) * 1000;
+----
+1000
+
+query III
+SELECT p.worker_id, p.process_id, p.increment FROM (SELECT discord.main.snowflake_parts('175928847299117063') AS p);
+----
+1	0	7
+
+query TTT
+SELECT discord.main.user_mention('80351110224678912'), discord.main.channel_mention('80351110224678912'), discord.main.role_mention('80351110224678912');
+----
+<@80351110224678912>	<#80351110224678912>	<@&80351110224678912>
+
+query T
+SELECT discord.main.user_mention('nope');
+----
+NULL
+
+query TT
+SELECT discord.main.timestamp_markdown(TIMESTAMPTZ '2026-01-01 00:00:00+00'), discord.main.timestamp_markdown(TIMESTAMPTZ '2026-01-01 00:00:00+00', 'R');
+----
+<t:1767225600>	<t:1767225600:R>
+
+statement error
+SELECT discord.main.timestamp_markdown(TIMESTAMPTZ '2026-01-01 00:00:00+00', 'x');
+----
+<REGEX>:.*
+
+query T
+SELECT discord.main.escape_markdown('**bold** my_file');
+----
+\*\*bold\*\* my\_file
+
+query TT
+SELECT discord.main.message_url('1', '2', '3'), discord.main.message_url(NULL, '2', '3');
+----
+https://discord.com/channels/1/2/3	https://discord.com/channels/@me/2/3
+
+query TT
+SELECT discord.main.avatar_url('80351110224678912', 'a_abc'), discord.main.avatar_url('80351110224678912', NULL);
+----
+https://cdn.discordapp.com/avatars/80351110224678912/a_abc.gif	https://cdn.discordapp.com/embed/avatars/5.png
+
+query T
+SELECT discord.main.permission_names('3072');
+----
+[VIEW_CHANNEL, SEND_MESSAGES]
+
+query TTT
+SELECT discord.main.has_permission('8', 'administrator'), discord.main.has_permission('3072', 'ADMINISTRATOR'), discord.main.has_permission(NULL, 'ADMINISTRATOR');
+----
+true	false	NULL
+
+statement error
+SELECT discord.main.has_permission('8', 'NOT_A_FLAG');
+----
+<REGEX>:.*unknown Discord permission.*
+
+query TT
+SELECT discord.main.channel_type_name(0), discord.main.channel_type_name(99);
+----
+GUILD_TEXT	NULL
+
+query I
+SELECT count(*) FROM discord.main.permission_flags;
+----
+51
+
+query IT
+SELECT type, name FROM discord.main.channel_types WHERE name LIKE '%THREAD' ORDER BY type;
+----
+10	ANNOUNCEMENT_THREAD
+11	PUBLIC_THREAD
+12	PRIVATE_THREAD
+
+# ------------------------------------------------------------ authentication
+
+# No secret and no DISCORD_BOT_TOKEN (the harness unsets it): the error says how to fix it.
+statement error
+SELECT * FROM discord.main.me();
+----
+<REGEX>:.*No Discord bot token.*
+
+statement ok
+CREATE SECRET discord_bad (TYPE discord, TOKEN 'wrong-token', API_BASE '{DISCORD_MOCK_API}');
+
+statement error
+SELECT * FROM discord.main.me();
+----
+<REGEX>:.*HTTP 401.*
+
+statement ok
+DROP SECRET discord_bad;
+
+statement ok
+CREATE SECRET discord_test (TYPE discord, TOKEN 'test-token', API_BASE '{DISCORD_MOCK_API}');
+
+# ------------------------------------------------------------ account and guilds
+
+query TTT
+SELECT user_id, username, is_bot FROM discord.main.me();
+----
+1215086513356800001	testbot	true
+
+query TIIT
+SELECT name, approximate_member_count, approximate_presence_count, is_owner FROM discord.main.guilds() ORDER BY name;
+----
+Second Guild	12	4	true
+Test Guild	1500	321	false
+
+query TIIIIT
+SELECT name, premium_tier, role_count, emoji_count, approximate_member_count, preferred_locale FROM discord.main.guild('1178847726796800002');
+----
+Test Guild	2	3	3	1500	en-US
+
+# Discord errors carry the HTTP status and Discord's own code.
+statement error
+SELECT * FROM discord.main.guild('999999999999999999');
+----
+<REGEX>:.*HTTP 404 \(code 10004\).*Unknown Guild.*
+
+statement error
+SELECT * FROM discord.main.channels('1251325299916800003');
+----
+<REGEX>:.*HTTP 403.*Missing Access.*
+
+# Ids are validated before any request.
+statement error
+SELECT * FROM discord.main.channels('general');
+----
+<REGEX>:.*
+
+query TI
+SELECT type_name, count(*) FROM discord.main.channels('1178847726796800002') GROUP BY type_name ORDER BY type_name;
+----
+GUILD_ANNOUNCEMENT	1
+GUILD_CATEGORY	1
+GUILD_FORUM	1
+GUILD_TEXT	1
+GUILD_VOICE	1
+
+query TTI
+SELECT name, parent_id, user_limit FROM discord.main.channels('1178847726796800002') WHERE type_name = 'GUILD_VOICE';
+----
+Lounge	NULL	10
+
+query TTTI
+SELECT name, type_name, locked, message_count FROM discord.main.active_threads('1178847726796800002') ORDER BY name;
+----
+How do I install?	PUBLIC_THREAD	false	12
+Off topic	PUBLIC_THREAD	true	3
+
+query TTT
+SELECT name, color_hex, discord.main.permission_names(permissions) FROM discord.main.roles('1178847726796800002') ORDER BY position DESC;
+----
+Admin	#e74c3c	[ADMINISTRATOR]
+Moderator	#3498db	[KICK_MEMBERS, MANAGE_MESSAGES, MANAGE_ROLES]
+@everyone	NULL	[VIEW_CHANNEL, SEND_MESSAGES]
+
+query T
+SELECT name FROM discord.main.roles('1178847726796800002') WHERE discord.main.has_permission(permissions, 'ADMINISTRATOR');
+----
+Admin
+
+# 1500 members across two 1000-member pages; the mock exhausts the rate-limit
+# bucket on every page, so the client must wait for the reset in between.
+query IIII
+SELECT count(*), count(DISTINCT user_id), count(*) FILTER (WHERE is_bot), count(*) FILTER (WHERE list_contains(role_ids, '1179572502528000010'))
+FROM discord.main.members('1178847726796800002', max_members := 5000);
+----
+1500	1500	3	150
+
+query I
+SELECT count(*) FROM discord.main.members('1178847726796800002');
+----
+1000
+
+query TTT
+SELECT username, nick, display_name FROM discord.main.members('1178847726796800002', max_members := 3) ORDER BY user_id;
+----
+user0000	nick0	nick0
+user0001	NULL	user0001
+user0002	NULL	User 2
+
+statement error
+SELECT * FROM discord.main.members('1178847726796800002', max_members := 0);
+----
+<REGEX>:.*
+
+query TTT
+SELECT name, animated, markup FROM discord.main.emojis('1178847726796800002') ORDER BY name;
+----
+dance	true	<a:dance:1179934890393600013>
+modonly	false	<:modonly:1179934890393600014>
+party	false	<:party:1179934890393600011>
+
+query TTTIT
+SELECT name, status, entity_type, user_count, location FROM discord.main.scheduled_events('1178847726796800002') ORDER BY name;
+----
+Community Call	SCHEDULED	VOICE	42	NULL
+Meetup	COMPLETED	EXTERNAL	7	Berlin
+
+# ------------------------------------------------------------ messages
+
+# Default: the newest 100.
+query ITT
+SELECT count(*), min(message_id), max(content) FROM discord.main.messages('1179210114662400004');
+----
+100	1323840621772800151	message 250
+
+# All 250 across three pages of 100; every row distinct.
+query IIII
+SELECT count(*), count(DISTINCT message_id), min(epoch_ms(created_at)), max(epoch_ms(created_at)) FROM discord.main.messages('1179210114662400004', max_messages := 1000);
+----
+250	250	1735689600000	1735704540000
+
+# max_messages cuts mid-page.
+query I
+SELECT count(*) FROM discord.main.messages('1179210114662400004', max_messages := 150);
+----
+150
+
+# before_id walks backwards from message 150 (exclusive).
+query IT
+SELECT count(*), max(content) FROM discord.main.messages('1179210114662400004', max_messages := 1000, before_id := '1323840370114560150');
+----
+149	message 99
+
+# after_id walks forwards from message 100 (exclusive).
+query IIT
+SELECT count(*), count(DISTINCT message_id), min(content) FROM discord.main.messages('1179210114662400004', max_messages := 1000, after_id := '1323827787202560100');
+----
+150	150	message 101
+
+# A time window via snowflake_from_timestamp: 04:00 UTC onwards is messages 241-250.
+query I
+SELECT count(*) FROM discord.main.messages('1179210114662400004', max_messages := 1000,
+  after_id := discord.main.snowflake_from_timestamp(TIMESTAMPTZ '2025-01-01 04:00:00+00'));
+----
+10
+
+statement error
+SELECT * FROM discord.main.messages('1179210114662400004', before_id := '1', after_id := '2');
+----
+<REGEX>:.*before_id or after_id.*
+
+statement error
+SELECT * FROM discord.main.messages('1179210114662400004', before_id := 'yesterday');
+----
+<REGEX>:.*snowflake.*
+
+query TIIT
+SELECT content, reaction_count, attachment_count, mentioned_user_ids FROM discord.main.messages('1179210114662400004', max_messages := 1);
+----
+message 250	4	1	[1287564099059712000]
+
+query TI
+SELECT r.emoji, r.count FROM (SELECT UNNEST(reactions) AS r FROM discord.main.messages('1179210114662400004', max_messages := 1)) ORDER BY r.count DESC;
+----
+👍	3
+party:1179934890393600011	1
+
+query TIT
+SELECT content, type, referenced_message_id FROM discord.main.message('1179210114662400004', '1323803124695040002');
+----
+message 2	19	1323802873036800001
+
+statement error
+SELECT * FROM discord.main.message('1179210114662400004', '1');
+----
+<REGEX>:.*HTTP 404.*Unknown Message.*
+
+query IT
+SELECT count(*), list(content ORDER BY pinned_at DESC)[1] FROM discord.main.pinned_messages('1179210114662400004');
+----
+5	message 250
+
+query IT
+SELECT count(*), min(username) FROM discord.main.reaction_users('1179210114662400004', '1323865535938560250', '👍');
+----
+3	user0003
+
+query T
+SELECT username FROM discord.main.reaction_users('1179210114662400004', '1323865535938560250', 'party:1179934890393600011');
+----
+user0003
+
+# ------------------------------------------------------------ writes (all into the empty announcements channel)
+
+# Mentions are suppressed by default ...
+query TTTT
+SELECT message_id, content, author_username, mention_everyone FROM discord.main.send_message('1179210114662400005', 'hello @everyone');
+----
+1334674513199104001	hello @everyone	testbot	false
+
+# ... and allowed on request.
+query T
+SELECT mention_everyone FROM discord.main.send_message('1179210114662400005', 'hello again @everyone', allow_mentions := true);
+----
+true
+
+query IT
+SELECT type, referenced_message_id FROM discord.main.send_message('1179210114662400005', 'a reply', reply_to := '1334674513199104001');
+----
+19	1334674513199104001
+
+statement error
+SELECT * FROM discord.main.send_message('1179210114662400005', '');
+----
+<REGEX>:.*content must not be empty.*
+
+statement error
+SELECT * FROM discord.main.send_message('1179210114662400005', repeat('x', 2001));
+----
+<REGEX>:.*longer than 2000.*
+
+query I
+SELECT count(*) FROM discord.main.messages('1179210114662400005');
+----
+3
+
+# One message per input row.
+query IIT
+SELECT count(*), count(*) FILTER (WHERE ok), min(channel_id) FROM discord.main.send_messages(
+  (SELECT '1179210114662400005' AS channel_id, 'row ' || i AS content FROM range(5) t(i)));
+----
+5	5	1179210114662400005
+
+query T
+SELECT list(content ORDER BY created_at) FROM discord.main.messages('1179210114662400005') WHERE content LIKE 'row %';
+----
+[row 0, row 1, row 2, row 3, row 4]
+
+# Failures are recorded per row with fail_on_error := false ...
+query TTT
+SELECT channel_id, ok, error FROM discord.main.send_messages(
+  (SELECT * FROM (VALUES ('999999999999999999', 'x'), ('1179210114662400005', '')) t(channel_id, content)),
+  fail_on_error := false) ORDER BY channel_id;
+----
+1179210114662400005	false	content must not be empty
+999999999999999999	false	Discord POST /channels/999999999999999999/messages failed with HTTP 404 (code 10003): Unknown Channel
+
+# ... and abort the query by default.
+statement error
+SELECT * FROM discord.main.send_messages((SELECT '999999999999999999' AS channel_id, 'x' AS content));
+----
+<REGEX>:.*HTTP 404.*
+
+statement error
+SELECT * FROM discord.main.send_messages((SELECT 'x' AS content));
+----
+<REGEX>:.*channel_id.*
+
+query TTT
+SELECT author_username, webhook_id, content FROM discord.main.send_webhook('https://discord.com/api/webhooks/1180297278259200012/whtoken', 'from a webhook', username := 'Reporter');
+----
+Reporter	1180297278259200012	from a webhook
+
+statement error
+SELECT * FROM discord.main.send_webhook('https://discord.com/api/webhooks/1180297278259200012/badtoken', 'nope');
+----
+<REGEX>:.*HTTP 401.*
+
+statement error
+SELECT * FROM discord.main.send_webhook('ftp://example.com/hook', 'nope');
+----
+<REGEX>:.*
+
+statement error
+SELECT * FROM discord.main.send_webhook('https://example.com/not-a-webhook', 'nope');
+----
+<REGEX>:.*webhook_url must look like.*
+
+query TT
+SELECT content, edited_at IS NOT NULL FROM discord.main.edit_message('1179210114662400005', '1334674513199104001', 'edited text');
+----
+edited text	true
+
+# The bot cannot edit other people's messages.
+statement error
+SELECT * FROM discord.main.edit_message('1179210114662400004', '1323803124695040002', 'hijack');
+----
+<REGEX>:.*HTTP 403 \(code 50005\).*
+
+query TTTT
+SELECT * FROM discord.main.add_reaction('1179210114662400004', '1323865535938560250', '✅');
+----
+1179210114662400004	1323865535938560250	✅	true
+
+query TTT
+SELECT * FROM discord.main.delete_message('1179210114662400005', '1334674513199104001');
+----
+1179210114662400005	1334674513199104001	true
+
+statement error
+SELECT * FROM discord.main.message('1179210114662400005', '1334674513199104001');
+----
+<REGEX>:.*HTTP 404.*
+
+statement ok
+DROP SECRET discord_test;
