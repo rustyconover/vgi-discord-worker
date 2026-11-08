@@ -173,7 +173,9 @@ export const AGENT_TEST_TASKS = [
 ];
 
 export const CATALOG_TAGS: Record<string, string> = {
-  "vgi.title": "Discord for DuckDB",
+  "vgi.title": "Discord API",
+  "vgi.subtitle":
+    "Read guilds, channels, members and message history from Discord, post messages, and decode Discord ids and permissions.",
   "vgi.doc_llm": CATALOG_DOC_LLM,
   "vgi.doc_md": CATALOG_DOC_MD,
   "vgi.source_url": SOURCE_URL,
