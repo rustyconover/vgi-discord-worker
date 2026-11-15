@@ -32,7 +32,30 @@ const USER_AGENT = `DiscordBot (${SOURCE_URL}, ${VERSION})`;
 export const DISCORD_SECRET_TYPE: SecretTypeDescriptor = {
   name: SECRET_TYPE,
   description: "Discord bot token (and optional API base URL) used by the discord worker's API functions.",
-  schema: schema([field("token", utf8(), true, new Map([["redact", "true"]])), field("api_base", utf8(), true)]),
+  schema: schema(
+    [
+      field(
+        "token",
+        utf8(),
+        true,
+        new Map([
+          ["redact", "true"],
+          [
+            "vgi_doc",
+            "Discord bot token, from the Bot page of your application in the Discord Developer Portal " +
+              "(Reset Token to reveal it).",
+          ],
+        ]),
+      ),
+      field(
+        "api_base",
+        utf8(),
+        true,
+        new Map([["vgi_doc", "Optional Discord API base URL; defaults to https://discord.com/api/v10."]]),
+      ),
+    ],
+    new Map([["vgi_doc_url", "https://discord.com/developers/docs/quick-start/getting-started"]]),
+  ),
 };
 
 export interface DiscordAuth {

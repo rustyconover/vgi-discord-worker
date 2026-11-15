@@ -96,6 +96,11 @@ export const CATALOG_DOC_MD =
   "Store the bot token in a DuckDB secret of type `discord` (or the `DISCORD_BOT_TOKEN` environment variable). " +
   "Rate limits are respected automatically.";
 
+/** One-line description for worker directories (the catalog comment); the guide lives in vgi.doc_md. */
+export const CATALOG_COMMENT =
+  "Discord servers, channels, members and message history as SQL tables, plus posting messages back " +
+  "through a bot token or webhook.";
+
 export const SCHEMA_DOC_LLM =
   "The main schema holds every Discord object. Readers come in two scopes: guild-scoped ones take a guild id " +
   "(find ids in the guilds listing) and message readers take a channel or thread id (from the channel or " +

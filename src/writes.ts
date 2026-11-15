@@ -222,11 +222,11 @@ export const sendMessages = defineTableInOutFunction<SendManyArgs>({
   examples: [
     {
       sql:
-        "SELECT count(*) FILTER (WHERE ok) AS sent FROM discord.main.send_messages(" +
+        "SELECT channel_id, message_id, ok, error FROM discord.main.send_messages(" +
         "(SELECT '123456789012345678' AS channel_id, 'Low stock: ' || sku AS content " +
-        "FROM (VALUES ('A-1', 2), ('B-7', 40)) inv(sku, qty) WHERE qty < 5), " +
+        "FROM (VALUES ('A-1', 2), ('B-7', 40), ('C-3', 1)) inv(sku, qty) WHERE qty < 5), " +
         "fail_on_error := false)",
-      description: "Post a low-stock alert per item and count successes",
+      description: "Post a low-stock alert per item and see which posts succeeded and why any failed",
     },
   ],
 });

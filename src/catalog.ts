@@ -8,7 +8,7 @@
 import type { CatalogDescriptor, VgiFunction } from "@query-farm/vgi";
 import { DISCORD_SECRET_TYPE } from "./discord/api.ts";
 import { MESSAGE_FUNCTIONS } from "./messages.ts";
-import { CATALOG_DOC_MD, CATALOG_NAME, CATALOG_TAGS, SCHEMA_DOC_MD, SCHEMA_TAGS, SOURCE_URL } from "./meta.ts";
+import { CATALOG_COMMENT, CATALOG_NAME, CATALOG_TAGS, SCHEMA_DOC_MD, SCHEMA_TAGS, SOURCE_URL } from "./meta.ts";
 import { READ_FUNCTIONS } from "./reads.ts";
 import { REFERENCE_FUNCTIONS, REFERENCE_TABLES, UTILITY_FUNCTIONS } from "./utilities.ts";
 import { WRITE_FUNCTIONS } from "./writes.ts";
@@ -70,7 +70,7 @@ function sampleExamples(examples: Example[], maxChars = 3500): Example[] {
 
 export const CATALOG: CatalogDescriptor = {
   name: CATALOG_NAME,
-  comment: CATALOG_DOC_MD,
+  comment: CATALOG_COMMENT,
   sourceUrl: SOURCE_URL,
   tags: CATALOG_TAGS,
   secretTypes: [DISCORD_SECRET_TYPE],
